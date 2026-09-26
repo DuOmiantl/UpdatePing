@@ -180,7 +180,7 @@ function Write-ReadableReport {
     )
 
     $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add("软件更新报告")
+    $lines.Add("UpdatePing 软件更新报告")
     $lines.Add("生成时间：$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
     $lines.Add("Winget：$($WingetItems.Count) 项待更新")
     $lines.Add("Scoop：$($ScoopItems.Count) 项待更新")
@@ -214,34 +214,110 @@ function Write-ReadableReport {
     $lines | Set-Content -Path $ReportPath -Encoding UTF8 -ErrorAction Stop
 }
 
+function Show-ToastNotice {
+    param(
+        [string]$Title,
+        [string]$Message
+    )
+
+    $ErrorActionPreference = 'Stop'
+    [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+    [void][Windows.UI.Notifications.ToastNotifier, Windows.UI.Notifications, ContentType = WindowsRuntime]
+    [void][Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime]
+    [void][Windows.UI.Notifications.NotificationSetting, Windows.UI.Notifications, ContentType = WindowsRuntime]
+    [void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+
+    $appId = 'SoftwareUpdateManager'
+    $identityPath = 'HKCU:\Software\Classes\AppUserModelId\' + $appId
+    if (-not (Test-Path -LiteralPath $identityPath)) {
+        New-Item -Path $identityPath -Force | Out-Null
+    }
+    New-ItemProperty -LiteralPath $identityPath -Name DisplayName -Value 'UpdatePing' -PropertyType String -Force | Out-Null
+
+    $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId)
+
+    $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+    $xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text></text><text></text></binding></visual></toast>')
+    $textNodes = $xml.GetElementsByTagName('text')
+    [void]$textNodes.Item(0).AppendChild($xml.CreateTextNode($Title))
+    [void]$textNodes.Item(1).AppendChild($xml.CreateTextNode($Message))
+
+    $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+    $toast.Tag = 'updates'
+    $toast.Group = 'SoftwareUpdateManager'
+    $notifier.Show($toast)
+
+    # 首次发送前，Windows 可能尚未初始化此应用的通知设置。
+    $setting = $notifier.get_Setting()
+    if ($setting.ToString() -ne 'Enabled') {
+        throw "Windows Toast 不可用：$setting"
+    }
+}
+
+function Show-BalloonNotice {
+    param(
+        [string]$Title,
+        [string]$Message
+    )
+
+    $ErrorActionPreference = 'Stop'
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+
+    $notify = New-Object System.Windows.Forms.NotifyIcon
+    try {
+        $notify.Icon = [System.Drawing.SystemIcons]::Information
+        $notify.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+        $notify.BalloonTipTitle = $Title
+        $notify.BalloonTipText = $Message
+        $notify.Visible = $true
+
+        $openReport = {
+            try {
+                if (Test-Path -LiteralPath $ReportPath) {
+                    Start-Process notepad.exe "`"$ReportPath`"" -ErrorAction Stop
+                }
+            }
+            catch {
+                [Console]::Error.WriteLine("打开报告失败：$($_.Exception.Message)")
+            }
+        }
+
+        $notify.add_BalloonTipClicked($openReport)
+        $notify.ShowBalloonTip(10000)
+
+        # 只在即时弹窗存在期间支持点击；报告文件会一直保留到下次检查覆盖
+        $until = (Get-Date).AddSeconds(20)
+        while ((Get-Date) -lt $until) {
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    finally {
+        $notify.Dispose()
+    }
+}
+
 function Show-Notice {
     param(
         [string]$Title,
         [string]$Message
     )
 
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
-
-    $notify = New-Object System.Windows.Forms.NotifyIcon
-    $notify.Icon = [System.Drawing.SystemIcons]::Information
-    $notify.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-    $notify.BalloonTipTitle = $Title
-    $notify.BalloonTipText = $Message
-    $notify.Visible = $true
-
-    $openReport = {
-        if (Test-Path $ReportPath) {
-            Start-Process notepad.exe "`"$ReportPath`""
-        }
+    try {
+        Show-ToastNotice -Title $Title -Message $Message
+        return
+    }
+    catch {
+        [Console]::Error.WriteLine("Toast 通知失败，将尝试托盘通知：$($_.Exception.Message)")
     }
 
-    $notify.add_BalloonTipClicked($openReport)
-    $notify.ShowBalloonTip(10000)
-
-    # 只在即时弹窗存在期间支持点击；报告文件会一直保留到下次检查覆盖
-    Start-Sleep -Seconds 20
-    $notify.Dispose()
+    try {
+        Show-BalloonNotice -Title $Title -Message $Message
+    }
+    catch {
+        [Console]::Error.WriteLine("托盘通知失败，更新报告仍可查看：$($_.Exception.Message)")
+    }
 }
 
 function Get-AllUpdates {
@@ -270,8 +346,8 @@ if ($CheckOnly) {
 
         if ($parts.Count -gt 0) {
             Show-Notice `
-                -Title "软件更新提醒" `
-                -Message (($parts -join "`n") + "`n打开桌面《软件更新管理器》可选择更新。")
+                -Title "UpdatePing" `
+                -Message (($parts -join "`n") + "`n打开 UpdatePing，查看并选择需要更新的软件。")
         }
     }
     catch {
@@ -289,7 +365,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "软件更新管理器"
+$form.Text = "UpdatePing"
 $form.StartPosition = "CenterScreen"
 $form.Size = New-Object System.Drawing.Size(980, 650)
 $form.MinimumSize = New-Object System.Drawing.Size(860, 520)
@@ -445,7 +521,7 @@ $btnReport.Add_Click({
     } else {
         [System.Windows.Forms.MessageBox]::Show(
             "还没有生成报告，请先点《重新检查》。",
-            "软件更新管理器",
+            "UpdatePing",
             "OK",
             "Information"
         ) | Out-Null
@@ -472,7 +548,7 @@ $btnUpdate.Add_Click({
     if ($selected.Count -eq 0) {
         [System.Windows.Forms.MessageBox]::Show(
             "请先勾选至少一个软件。",
-            "软件更新管理器",
+            "UpdatePing",
             "OK",
             "Information"
         ) | Out-Null
@@ -515,7 +591,7 @@ $btnUpdate.Add_Click({
     }
 
     $commands.Add('')
-    $commands.Add('Write-Host "`n所选更新任务已执行完。建议回到《软件更新管理器》点《重新检查》确认结果。" -ForegroundColor Green')
+    $commands.Add('Write-Host "`n所选更新任务已执行完。建议回到 UpdatePing 点《重新检查》确认结果。" -ForegroundColor Green')
     $commands.Add('Read-Host "按 Enter 关闭此窗口"')
 
     $commands | Set-Content -Path $tempScript -Encoding UTF8
@@ -530,7 +606,7 @@ $btnUpdate.Add_Click({
 
     [System.Windows.Forms.MessageBox]::Show(
         "已打开更新窗口。更新完成后回到这里点《重新检查》即可。",
-        "软件更新管理器",
+        "UpdatePing",
         "OK",
         "Information"
     ) | Out-Null

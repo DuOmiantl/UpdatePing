@@ -4,14 +4,14 @@ $installDir = Join-Path $env:USERPROFILE 'SoftwareUpdateManager'
 $sourcePath = Join-Path $PSScriptRoot 'SoftwareUpdateManager.ps1'
 $programPath = Join-Path $installDir 'SoftwareUpdateManager.ps1'
 $manifestPath = Join-Path $installDir 'install.json'
-$desktopPath = Join-Path (Join-Path $env:USERPROFILE 'Desktop') 'Software Update Manager.cmd'
+$desktopPath = Join-Path (Join-Path $env:USERPROFILE 'Desktop') 'UpdatePing.cmd'
 $taskName = 'SoftwareUpdateManager-v0.1.0'
 $taskUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $taskArguments = '-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $programPath + '" -CheckOnly'
 $launcher = "@echo off`r`npowershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File `"%USERPROFILE%\SoftwareUpdateManager\SoftwareUpdateManager.ps1`"`r`nif errorlevel 1 pause`r`n"
 
-Write-Host "将安装程序到 $installDir，创建桌面入口 $desktopPath，并为当前用户创建登录后延迟 1 分钟的后台检查任务 $taskName。"
-Write-Host '安装不会执行任何软件更新；已有报告会保留。'
+Write-Host "将设置 UpdatePing：复制程序到 $installDir，创建桌面入口 $desktopPath，并为当前用户创建登录后延迟 1 分钟的后台检查任务 $taskName。"
+Write-Host '设置 UpdatePing 不会执行任何软件更新；已有报告会保留。'
 
 if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
     throw "找不到程序文件：$sourcePath"
@@ -69,7 +69,7 @@ if (-not $existingTask) {
     $trigger.Delay = 'PT1M'
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $taskArguments
     $principal = New-ScheduledTaskPrincipal -UserId $taskUser -LogonType Interactive -RunLevel Limited
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Description '检查 Winget 和 Scoop 更新，仅在有更新时通知。' | Out-Null
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Description 'UpdatePing：登录后检查软件更新，仅在有更新时通知。' | Out-Null
 }
 
-Write-Host '安装完成。可从桌面入口打开，或等待下次登录时后台检查。'
+Write-Host 'UpdatePing 设置完成。可从桌面 UpdatePing.cmd 打开，或等待下次登录时后台检查。'

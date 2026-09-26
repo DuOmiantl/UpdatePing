@@ -1,3 +1,4 @@
 software-updates-latest.txt
 software-update-selected-*.ps1
 *.log
+*.bak
